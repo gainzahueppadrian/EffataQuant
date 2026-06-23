@@ -20,4 +20,8 @@ include_directories(
 # We will just compile an executable to verify everything links properly.
 add_executable(effata_investments src/main.cpp)
 
-target_link_libraries(effata_investments Eigen3::Eigen)
+find_package(PkgConfig REQUIRED)
+pkg_search_module(ZMQ REQUIRED libzmq)
+
+target_link_libraries(effata_investments Eigen3::Eigen ${ZMQ_LIBRARIES})
+target_include_directories(effata_investments PRIVATE ${ZMQ_INCLUDE_DIRS})

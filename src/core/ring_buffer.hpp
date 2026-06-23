@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <vector>
+#include <utility>
 #include <cstdint>
 #include <stdexcept>
 #include <optional>

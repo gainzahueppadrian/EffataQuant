@@ -103,6 +103,8 @@ private:
     MatrixXd transition_matrix_;
     MatrixXd log_transition_matrix_;
     VectorXd current_probs_; // Prior probs for online inference
+    VectorXd log_emission_buffer_;
+    VectorXd new_probs_buffer_;
 
     std::atomic<int> current_state_{0};
     std::atomic<bool> regime_change_detected_{false};
@@ -137,6 +139,8 @@ public:
                 transition_matrix_ = MatrixXd::Constant(config_.n_states, config_.n_states, 1.0 / config_.n_states);
         log_transition_matrix_ = transition_matrix_.array().log();
         current_probs_ = VectorXd::Constant(config_.n_states, 1.0 / config_.n_states);
+        log_emission_buffer_.resize(config_.n_states);
+        new_probs_buffer_.resize(config_.n_states);
     }
 
     /**
@@ -181,13 +185,12 @@ public:
      */
     ALWAYS_INLINE int filter_online(const VectorXd& observation) {
         int N = config_.n_states;
-        VectorXd log_emission(N);
+
         for (int i = 0; i < N; ++i) {
-            log_emission(i) = states_[i].log_emission_probability(observation);
+            log_emission_buffer_(i) = states_[i].log_emission_probability(observation);
         }
 
         // Viterbi online update (max-sum)
-        VectorXd new_probs(N);
         int best_state = 0;
         double max_prob = -std::numeric_limits<double>::infinity();
 
@@ -199,10 +202,10 @@ public:
                     max_trans_prob = p;
                 }
             }
-            new_probs(j) = max_trans_prob + log_emission(j);
+            new_probs_buffer_(j) = max_trans_prob + log_emission_buffer_(j);
 
-            if (new_probs(j) > max_prob) {
-                max_prob = new_probs(j);
+            if (new_probs_buffer_(j) > max_prob) {
+                max_prob = new_probs_buffer_(j);
                 best_state = j;
             }
         }
@@ -210,12 +213,12 @@ public:
         // Normalize (log-sum-exp)
         double sum_exp = 0.0;
         for (int j = 0; j < N; ++j) {
-            sum_exp += std::exp(new_probs(j) - max_prob);
+            sum_exp += std::exp(new_probs_buffer_(j) - max_prob);
         }
         double log_sum = max_prob + std::log(sum_exp);
 
         for (int j = 0; j < N; ++j) {
-            current_probs_(j) = std::exp(new_probs(j) - log_sum);
+            current_probs_(j) = std::exp(new_probs_buffer_(j) - log_sum);
         }
 
         int prev_state = current_state_.load(std::memory_order_relaxed);
