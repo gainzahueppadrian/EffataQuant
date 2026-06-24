@@ -1,11 +1,14 @@
 #include <iostream>
 #include <thread>
+#include <cstdlib>
 #include "core/ring_buffer.hpp"
 #include "core/messages.hpp"
 #include "regime/dgmh_eigen.hpp"
 #include "pricing/hamiltonian.hpp"
 #include "ibkr/ibkr_wrapper.hpp"
 #include "execution/smart_router.hpp"
+#include "execution/alpha_evolve_fsm.hpp"
+#include "risk/compliance_guard.hpp"
 #include "risk/evt_engine.hpp"
 #include "ipc/zmq_reactor.hpp"
 
@@ -34,6 +37,7 @@ int main() {
     // 4. Execution & Routing
     ibkr::IBKRWrapper ibkr("127.0.0.1", 7497, 1);
     execution::SmartOrderRouter router(3); // 3 Brokers (e.g., IBKR, Lightspeed, Schwab)
+    execution::AlphaEvolveFSM alpha_fsm;
 
     // Simulate offline training
     std::cout << "Training DGMH Engine offline..." << std::endl;
@@ -62,15 +66,12 @@ int main() {
         std::vector<pricing::HamiltonianEngine::OptionData> puts = { {95.0, 4.0, 1500, 6000, 0.06} };
 
         while (running || !market_data_queue.empty_heuristic()) {
-            // Poll for AlphaEvolve Python Orchestrator Commands
             reactor.poll_commands();
 
             Eigen::VectorXd obs;
             if (market_data_queue.pop(obs)) {
-                // EVT Risk update
                 evt_engine.update_online(std::abs(obs(0) - 100.0));
 
-                // Regime inference
                 int state = regime_engine.filter_online(obs);
                 if (regime_engine.regime_change_detected()) {
                     regime_engine.reset_regime_change_flag();
@@ -82,6 +83,18 @@ int main() {
                 if (force > 0 && state == 0) {
                     double cvar = evt_engine.compute_expected_shortfall(0.99);
                     double fraction = kelly_engine.compute_fraction(0.65, 1.5, 0.1);
+
+                    // AlphaEvolve FSM 4D and Compliance Check
+                    risk::Portfolio port{100000.0, 50000.0};
+                    double safe_leverage = alpha_fsm.compute_safe_leverage(port.net_liquidation_value, cvar);
+
+                    std::vector<std::string> zero_slippage_tickers = {"SPY", "QQQ", "AAPL"};
+                    alpha_fsm.optimize_nd_calendar_spreads(zero_slippage_tickers, 15.0);
+
+                    risk::StrategyType current_strat = alpha_fsm.get_active_strategy();
+                    if (!risk::ComplianceGuard::is_order_safe(current_strat, 1000.0 * safe_leverage, cvar, port)) {
+                        continue; // Blocked by Warren Buffett Guard
+                    }
 
                     if (cvar < 5.0 && fraction > 0.0) {
                         core::OrderMessage master_order(1, 12345, 100, price, 0, 1, 0); // Buy 100
