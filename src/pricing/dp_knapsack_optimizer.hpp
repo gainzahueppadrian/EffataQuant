@@ -1,112 +1,169 @@
 #pragma once
-
 #include <vector>
-#include <algorithm>
+#include <optional>
 #include <cmath>
-#include <iostream>
+#include <algorithm>
+#include <limits>
+#include <string>
 
 #define HOT [[gnu::hot]]
 #define ALWAYS_INLINE [[gnu::always_inline]] inline
 
 namespace berkshire::pricing {
 
-/**
- * @brief Represents an individual Option Leg (Contract) inside the optimizer
- */
-struct LegCandidate {
-    int id;
-    double premium_cost; // Positive if buying, Negative if selling
-    double margin_requirement;
+enum class MarketRegime {
+    LATERAL_LOW_VOL,
+    LATERAL_HIGH_VOL,
+    DIRECTIONAL_BULL,
+    DIRECTIONAL_BEAR,
+    CRISIS
+};
 
-    // Greeks
+struct OptionLeg {
+    std::string symbol;
+    double strike;
+    int expiration_dte;
+    bool is_call;
+    double price;
     double delta;
     double gamma;
     double theta;
     double vega;
-
-    double dte; // Days to expiration
+    double iv;
+    double cvar; // Precomputed CVaR impact
 };
 
-/**
- * @brief Dynamic Programming Knapsack Optimizer
- * Maximizes institutional structural advantage (Vega/Theta, Gamma accumulation)
- * subject to Warren Buffett capital/CVaR constraints.
- */
+struct KnapsackConfig {
+    MarketRegime regime;
+    double target_portfolio_delta;
+    double max_portfolio_cvar;
+    int required_legs;
+};
+
+struct OptimizedStructure {
+    std::vector<OptionLeg> selected_legs;
+    double total_score;
+    double total_delta;
+    double total_vega;
+    double total_gamma;
+    double total_theta;
+    double total_cvar;
+};
+
 class DPKnapsackOptimizer {
 public:
-    /**
-     * @brief DP Knapsack solver to find optimal legs to construct N-Double Diagonals.
-     * Evaluates combinations of legs to maximize the Objective Function (Vega + Gamma bias)
-     * without exceeding the maximum allowed capital or CVaR bounds.
-     */
-    HOT std::vector<LegCandidate> optimize_legs(
-        const std::vector<LegCandidate>& universe,
-        double max_capital,
-        bool is_directional,
-        double target_delta_bias)
-    {
-        // For sub-nanosecond HFT, a true continuous DP knapsack over thousands of legs is too slow.
-        // We utilize a Greedy-Fractional approximation sorted by an Econophysics heuristic score.
+    explicit DPKnapsackOptimizer() {}
 
-        std::vector<LegCandidate> sorted_universe = universe;
+    HOT std::optional<OptimizedStructure> solve(const KnapsackConfig& config, const std::vector<OptionLeg>& available_legs) {
+        if (available_legs.empty() || config.required_legs <= 0) {
+            return std::nullopt;
+        }
 
-        std::sort(sorted_universe.begin(), sorted_universe.end(), [&](const LegCandidate& a, const LegCandidate& b) {
-            return score_leg(a, is_directional, target_delta_bias) > score_leg(b, is_directional, target_delta_bias);
-        });
+        const int W = 1000;
+        double max_cvar = config.max_portfolio_cvar;
+        double cvar_step = max_cvar / W;
 
-        std::vector<LegCandidate> selected_legs;
-        double current_capital = 0.0;
-        double net_delta = 0.0;
+        std::vector<double> dp(W + 1, -std::numeric_limits<double>::infinity());
+        std::vector<int> parent_leg(W + 1, -1);
+        std::vector<int> parent_state(W + 1, -1);
 
-        for (const auto& leg : sorted_universe) {
-            double capital_hit = std::max(leg.premium_cost, leg.margin_requirement); // Cost to enter
+        dp[0] = 0.0;
+        std::vector<int> leg_count(W + 1, 0);
 
-            if (current_capital + capital_hit <= max_capital) {
-                // If lateral, we strictly balance delta near zero.
-                if (!is_directional && selected_legs.size() >= 2) {
-                    if (std::abs(net_delta + leg.delta) > 0.15) {
-                        continue; // Skip, would skew the delta too much in a lateral strategy
+        for (size_t i = 0; i < available_legs.size(); ++i) {
+            const auto& leg = available_legs[i];
+            int w_leg = static_cast<int>(std::ceil(leg.cvar / cvar_step));
+
+            if (w_leg > W || w_leg <= 0) continue;
+
+            double leg_score = calculate_leg_score(leg, config);
+
+            for (int w = W; w >= w_leg; --w) {
+                int prev_w = w - w_leg;
+                int prev_legs = leg_count[prev_w];
+
+                if (dp[prev_w] != -std::numeric_limits<double>::infinity() &&
+                    (prev_legs + 1) <= config.required_legs) {
+
+                    double new_score = dp[prev_w] + leg_score;
+
+                    if (new_score > dp[w] || (new_score == dp[w] && (prev_legs + 1) > leg_count[w])) {
+                        dp[w] = new_score;
+                        parent_leg[w] = static_cast<int>(i);
+                        parent_state[w] = prev_w;
+                        leg_count[w] = prev_legs + 1;
                     }
-                }
-
-                selected_legs.push_back(leg);
-                current_capital += capital_hit;
-                net_delta += leg.delta;
-
-                // Construct a 4-leg structure (Double Diagonal)
-                if (selected_legs.size() == 4) {
-                    break;
                 }
             }
         }
 
-        return selected_legs;
+        double best_score = -std::numeric_limits<double>::infinity();
+        int best_w = -1;
+
+        for (int w = 0; w <= W; ++w) {
+            if (leg_count[w] == config.required_legs && dp[w] > best_score) {
+                best_score = dp[w];
+                best_w = w;
+            }
+        }
+
+        if (best_w == -1) {
+            return std::nullopt;
+        }
+
+        OptimizedStructure result;
+        int current_w = best_w;
+        while (current_w > 0 && parent_leg[current_w] != -1) {
+            int leg_idx = parent_leg[current_w];
+            result.selected_legs.push_back(available_legs[leg_idx]);
+            current_w = parent_state[current_w];
+        }
+
+        calculate_structure_metrics(result, config);
+
+        if (std::abs(result.total_delta - config.target_portfolio_delta) > 0.15) {
+            return std::nullopt;
+        }
+
+        return result;
     }
 
 private:
-    /**
-     * @brief Objective Function Score
-     * Maximizes Vega and Gamma while maintaining an asymmetric Theta decay profile.
-     */
-    ALWAYS_INLINE double score_leg(const LegCandidate& leg, bool is_directional, double target_delta_bias) const {
-        // Safe denominator handling
-        double safe_theta = std::abs(leg.theta) < 1e-6 ? 1e-6 : std::abs(leg.theta);
+    ALWAYS_INLINE double calculate_leg_score(const OptionLeg& leg, const KnapsackConfig& config) const {
+        double base_score = (leg.vega + leg.gamma) / std::max(std::abs(leg.theta), 0.001);
 
-        // Base score: We want high Vega and High Gamma for the cheapest Theta decay cost
-        double base_score = (std::max(0.0, leg.vega) + std::max(0.0, leg.gamma * 100.0)) / safe_theta;
-
-        // Penalty or bonus for directional alignment
-        if (is_directional) {
-            // Reward legs that align with our target delta bias (momentum capturing)
-            double delta_alignment = leg.delta * target_delta_bias;
-            base_score += delta_alignment * 10.0;
-        } else {
-            // In lateral markets, we want delta-neutral legs with high structural convexity
-            double delta_penalty = std::abs(leg.delta) * 5.0;
-            base_score -= delta_penalty;
+        if (config.regime == MarketRegime::LATERAL_LOW_VOL || config.regime == MarketRegime::LATERAL_HIGH_VOL) {
+            base_score -= 5.0 * std::abs(leg.delta);
+        } else if (config.regime == MarketRegime::DIRECTIONAL_BULL) {
+            if (leg.delta > 0) base_score += 3.0 * leg.delta;
+            else base_score -= 2.0 * std::abs(leg.delta);
+        } else if (config.regime == MarketRegime::DIRECTIONAL_BEAR) {
+            if (leg.delta < 0) base_score += 3.0 * std::abs(leg.delta);
+            else base_score -= 2.0 * leg.delta;
         }
 
+        if (leg.vega < 0) base_score -= 10.0;
+        if (leg.gamma < 0) base_score -= 5.0;
+
         return base_score;
+    }
+
+    void calculate_structure_metrics(OptimizedStructure& result, const KnapsackConfig& config) const {
+        result.total_score = 0.0;
+        result.total_delta = 0.0;
+        result.total_vega = 0.0;
+        result.total_gamma = 0.0;
+        result.total_theta = 0.0;
+        result.total_cvar = 0.0;
+
+        for (const auto& leg : result.selected_legs) {
+            result.total_score += calculate_leg_score(leg, config);
+            result.total_delta += leg.delta;
+            result.total_vega += leg.vega;
+            result.total_gamma += leg.gamma;
+            result.total_theta += leg.theta;
+            result.total_cvar += leg.cvar;
+        }
     }
 };
 

@@ -107,16 +107,13 @@ int main() {
                     regime_engine.reset_regime_change_flag();
                 }
 
+                double force = pricing_engine.compute_probable_direction(price, calls);
 
-                // Anchored VWAP Evaluation (Brian Shannon methodology)
-                // Simulated AVWAP values (In reality, calculated via Data Feed cumulative (Price*Volume)/Volume)
+                // AVWAP
                 double avwap_earnings = 100.5;
                 double avwap_gap = 99.8;
                 double avwap_ath = 105.0;
-
                 bool avwap_confluence = alpha_fsm.evaluate_anchored_vwap(price, avwap_earnings, avwap_gap, avwap_ath);
-
-                double force = pricing_engine.compute_probable_direction(price, calls);
 
                 if (force > 0 && state == 0 && avwap_confluence) {
                     double cvar = evt_engine.compute_expected_shortfall(0.99);
@@ -124,48 +121,43 @@ int main() {
                     risk::Portfolio port{100000.0, 50000.0};
                     double safe_leverage = alpha_fsm.compute_safe_leverage(port.net_liquidation_value, cvar);
 
-
-                    // Dynamic Programming Knapsack 4-Leg Optimization
-                    // Simulated Options Universe Data (In reality, populated directly from OPRA/DataHub via AF_XDP)
-                    std::vector<pricing::LegCandidate> universe = {
-                        {1, -2.5, 0.0, 0.45, 0.08, -0.05, 0.12, 14.0},  // Near-term call
-                        {2, 1.2, 500.0, -0.30, -0.06, 0.08, -0.09, 7.0}, // Short-term call
-                        {3, -2.8, 0.0, -0.45, 0.08, -0.04, 0.14, 14.0},  // Near-term put
-                        {4, 1.0, 500.0, 0.30, -0.05, 0.07, -0.10, 7.0},  // Short-term put
-                        // ... Additional hundreds of strikes evaluated in microseconds
+                    // DP Knapsack optimization for Structure Generation
+                    std::vector<pricing::OptionLeg> universe = {
+                        {"SPY", 100.0, 30, true, 2.50, 0.45, 0.08, -0.05, 0.12, 0.20, 150.0},
+                        {"SPY", 105.0, 7, false, 1.20, -0.30, -0.06, 0.08, -0.09, 0.22, 50.0},
+                        {"SPY", 95.0, 30, false, 2.80, -0.45, 0.08, -0.04, 0.14, 0.25, 200.0},
+                        {"SPY", 90.0, 7, true, 1.00, 0.30, -0.05, 0.07, -0.10, 0.28, 40.0}
                     };
 
-                    bool is_directional = (state == 1 || state == 2);
-                    auto optimal_legs = dp_optimizer.optimize_legs(universe, port.net_liquidation_value * safe_leverage, is_directional, force > 0 ? 1.0 : -1.0);
+                    pricing::KnapsackConfig dp_config;
+                    dp_config.regime = pricing::MarketRegime::LATERAL_LOW_VOL;
+                    dp_config.target_portfolio_delta = 0.0;
+                    dp_config.max_portfolio_cvar = port.net_liquidation_value * safe_leverage;
+                    dp_config.required_legs = 4;
 
-                    if (optimal_legs.size() == 4) {
+                    auto optimized_structure = dp_optimizer.solve(dp_config, universe);
+
+                    if (optimized_structure.has_value()) {
                         std::cout << "[Executor] ✅ 4-Leg Double Diagonal structure assembled successfully via DP Knapsack." << std::endl;
                     }
 
-                    std::vector<std::string> zero_slippage_tickers = {"SPY", "QQQ", "AAPL"};
-                    alpha_fsm.optimize_nd_calendar_spreads(zero_slippage_tickers, 15.0);
-
-
                     // Evaluate Lateral vs Directional Regimes for Double Diagonal structures
-                    if (state == 0) { // Assuming 0 is a Lateral Regime from DGMH
-                        alpha_fsm.orchestrate_double_diagonal(berkshire::execution::MarketRegime::LATERAL_LOW_VOL, 0.0);
-                    } else if (state == 1) { // Assuming 1 is a Bullish Directional Regime
-                        alpha_fsm.orchestrate_double_diagonal(berkshire::execution::MarketRegime::TRENDING_BULL, force);
+                    if (state == 0) {
+                        alpha_fsm.orchestrate_double_diagonal(state, 0.0);
+                    } else if (state == 1) {
+                        alpha_fsm.orchestrate_double_diagonal(state, force);
                     }
 
                     risk::StrategyType current_strat = alpha_fsm.get_active_strategy();
                     if (!risk::ComplianceGuard::is_order_safe(current_strat, 1000.0 * safe_leverage, cvar, port)) {
-                        continue;
+                        continue; // Blocked by Warren Buffett Guard
                     }
-
 
                     double r_of_ruin = lln.calculate_risk_of_ruin(0.70, 1.5, 0.02, 1000, 100);
                     double optimal_f = crra_kelly.compute_fraction(0.70, 1.5, 2.0);
 
                     if (cvar < 5.0 && optimal_f > 0.0 && r_of_ruin < 0.01) {
                         core::OrderMessage master_order(1, 12345, 100, price, 0, 1, 0);
-
-                        // Cryptographic Signature
                         master_order.signature = signer.sign_payload(&master_order, 27);
 
                         std::vector<core::OrderMessage> frags;
@@ -180,9 +172,7 @@ int main() {
                 core::cpu_relax();
             }
         }
-    });
-
-    // Execution Draining Thread
+    });    // Execution Draining Thread
     std::thread execution_drainer([&]() {
         while (running || execution_queue.has_items()) {
             core::OrderMessage msg;
