@@ -13,6 +13,16 @@
 
 namespace berkshire::execution {
 
+enum class MarketRegime {
+    LATERAL_LOW_VOL,
+    LATERAL_HIGH_VOL,
+    TRENDING_BULL,
+    TRENDING_BEAR,
+    VOLATILE_MEAN_REV,
+    CRISIS,
+    TRANSITION
+};
+
 class AlphaEvolveFSM {
 public:
     enum class State {
@@ -70,6 +80,46 @@ public:
         }
 
         return false;
+    }
+
+
+    /**
+     * @brief Advanced N-Double Diagonal Orchestration (Symmetric vs Asymmetric)
+     * Replaces standard Iron Condors with Positive Vega configurations.
+     */
+    HOT ALWAYS_INLINE void orchestrate_double_diagonal(MarketRegime regime, double directional_force) {
+        if (regime == MarketRegime::LATERAL_LOW_VOL || regime == MarketRegime::LATERAL_HIGH_VOL) {
+            std::cout << "[AlphaEvolve] ⚖️ Lateral Regime Detected: Constructing SYMMETRIC N-Double Diagonal." << std::endl;
+            std::cout << " -> Delta Netto ~ 0. Positive Vega. Selling near-term, buying far-term OTM." << std::endl;
+            active_strategy_.store(risk::StrategyType::DoubleDiagonalSpread, std::memory_order_release);
+        } else {
+            std::cout << "[AlphaEvolve] 🚀 Directional Regime Detected: Constructing ASYMMETRIC N-Double Diagonal." << std::endl;
+            if (directional_force > 0) {
+                std::cout << " -> Bullish Bias: Long Call ITM/ATM, Short Call far OTM. Put side defensive." << std::endl;
+                active_strategy_.store(risk::StrategyType::TunnelBullish, std::memory_order_release);
+            } else {
+                std::cout << " -> Bearish Bias: Long Put ITM/ATM, Short Put far OTM. Call side defensive." << std::endl;
+                active_strategy_.store(risk::StrategyType::TunnelBearish, std::memory_order_release);
+            }
+        }
+    }
+
+
+    HOT ALWAYS_INLINE void orchestrate_double_diagonal(int regime_state, double directional_force) {
+        if (regime_state == 0) {
+            std::cout << "[AlphaEvolve] ⚖️ Lateral Regime Detected: Constructing SYMMETRIC N-Double Diagonal." << std::endl;
+            std::cout << " -> Delta Netto ~ 0. Positive Vega. Selling near-term, buying far-term OTM." << std::endl;
+            active_strategy_.store(risk::StrategyType::DoubleDiagonalSpread, std::memory_order_release);
+        } else {
+            std::cout << "[AlphaEvolve] 🚀 Directional Regime Detected: Constructing ASYMMETRIC N-Double Diagonal." << std::endl;
+            if (directional_force > 0) {
+                std::cout << " -> Bullish Bias: Long Call ITM/ATM, Short Call far OTM. Put side defensive." << std::endl;
+                active_strategy_.store(risk::StrategyType::TunnelBullish, std::memory_order_release);
+            } else {
+                std::cout << " -> Bearish Bias: Long Put ITM/ATM, Short Put far OTM. Call side defensive." << std::endl;
+                active_strategy_.store(risk::StrategyType::TunnelBearish, std::memory_order_release);
+            }
+        }
     }
 
     HOT ALWAYS_INLINE void optimize_nd_calendar_spreads(const std::vector<std::string>& top_k_tickers, double iv_percentile) {
