@@ -61,7 +61,7 @@ struct alignas(CACHE_LINE) State {
 
         for (size_t m = 0; m < components.size(); ++m) {
             const auto& comp = components[m];
-            VectorXd diff = observation - comp.mean;
+            VectorXd diff(observation.size()); diff.noalias() = observation - comp.mean;
 
             double mahal_sq = diff.transpose() * comp.inv_covariance * diff;
             int D = observation.size();

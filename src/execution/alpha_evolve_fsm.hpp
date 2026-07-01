@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <iostream>
+#include <cmath>
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -87,6 +88,14 @@ public:
             std::cout << "[AlphaEvolve] Regime: Trending -> Mutating to Diagonal Put Spread." << std::endl;
             active_strategy_.store(risk::StrategyType::DiagonalPutSpread, std::memory_order_release);
         }
+    }
+
+    HOT ALWAYS_INLINE bool evaluate_micro_vcp(double inside_day_high, double inside_day_low, double current_price, double current_volume, double avg_volume) {
+        if (current_price > inside_day_high && current_volume > avg_volume * 1.5) {
+            std::cout << "[AlphaEvolve FSM] 🎯 Martin Luke Micro-VCP Breakout Detected! Entry triggered." << std::endl;
+            return true;
+        }
+        return false;
     }
 
     HOT ALWAYS_INLINE double compute_safe_leverage(double current_capital, double cvar_limit) {

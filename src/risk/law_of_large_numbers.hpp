@@ -113,4 +113,21 @@ public:
     }
 };
 
+
+/**
+ * @brief Martin Luke Asymmetric Position Sizer
+ * Exploits extreme risk asymmetry by maximizing position size based on micro-stops (1.5%).
+ */
+class MartinLukeSizer {
+public:
+    ALWAYS_INLINE double calculate_shares(double account_value, double risk_percent, double entry_price, double stop_loss_price) const {
+        double max_dollar_risk = account_value * risk_percent;
+        double risk_per_share = entry_price - stop_loss_price;
+        if (risk_per_share <= 0.0) return 0.0;
+
+        // This is the key: tighter stop -> massive share size increase
+        return std::floor(max_dollar_risk / risk_per_share);
+    }
+};
+
 } // namespace berkshire::risk
