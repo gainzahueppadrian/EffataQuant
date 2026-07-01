@@ -48,6 +48,29 @@ public:
     }
 
 
+
+    HOT ALWAYS_INLINE bool evaluate_anchored_vwap(double current_price, double avwap_earnings, double avwap_gap, double avwap_ath) {
+        // High conviction "Multiple Edge Entry" if price bounces at the confluence of multiple AVWAPs and EMAs
+        double avwap_confluence_band = 0.015; // 1.5% confluence zone
+
+        bool near_earnings_avwap = std::abs(current_price - avwap_earnings) / avwap_earnings < avwap_confluence_band;
+        bool near_gap_avwap = std::abs(current_price - avwap_gap) / avwap_gap < avwap_confluence_band;
+        bool near_ath_avwap = std::abs(current_price - avwap_ath) / avwap_ath < avwap_confluence_band;
+
+        if (near_earnings_avwap || near_gap_avwap || near_ath_avwap) {
+            std::cout << "[AlphaEvolve FSM] 🎯 Smart Money AVWAP Confluence Detected. Preparing execution." << std::endl;
+            return true;
+        }
+
+        if (current_price < avwap_earnings && current_price < avwap_gap) {
+            std::cout << "[AlphaEvolve FSM] ⚠️ AVWAP support lost. Institutional trend broken." << std::endl;
+            trigger_defensive_mode();
+            return false;
+        }
+
+        return false;
+    }
+
     HOT ALWAYS_INLINE void optimize_nd_calendar_spreads(const std::vector<std::string>& top_k_tickers, double iv_percentile) {
         for (const auto& ticker : top_k_tickers) {
             std::cout << "[AlphaEvolve] 4D Optimizing N-Double Calendar Spread for: " << ticker

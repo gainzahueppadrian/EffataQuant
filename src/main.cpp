@@ -105,9 +105,18 @@ int main() {
                     regime_engine.reset_regime_change_flag();
                 }
 
+
+                // Anchored VWAP Evaluation (Brian Shannon methodology)
+                // Simulated AVWAP values (In reality, calculated via Data Feed cumulative (Price*Volume)/Volume)
+                double avwap_earnings = 100.5;
+                double avwap_gap = 99.8;
+                double avwap_ath = 105.0;
+
+                bool avwap_confluence = alpha_fsm.evaluate_anchored_vwap(price, avwap_earnings, avwap_gap, avwap_ath);
+
                 double force = pricing_engine.compute_probable_direction(price, calls);
 
-                if (force > 0 && state == 0) {
+                if (force > 0 && state == 0 && avwap_confluence) {
                     double cvar = evt_engine.compute_expected_shortfall(0.99);
 
                     risk::Portfolio port{100000.0, 50000.0};
