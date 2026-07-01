@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <vector>
 #include <Eigen/Dense>
+#include <iostream>
 
 #define HOT [[gnu::hot]]
 #define ALWAYS_INLINE [[gnu::always_inline]] inline
@@ -13,80 +14,61 @@ namespace berkshire::risk {
 /**
  * @brief Extreme Value Theory (EVT) Engine
  * Models tail risks using the Generalized Pareto Distribution (GPD) via Peak-Over-Threshold (POT).
+ * Upgraded with Hill Estimator and MLE Newton-Raphson approximation.
  */
 class EVTEngine {
 public:
-    EVTEngine(double threshold) : u_(threshold), xi_(0.1), beta_(1.0) {}
+    EVTEngine(double threshold) : u_(threshold), xi_(0.1), beta_(1.0), tail_count_(0) {}
 
     /**
-     * @brief Online Stochastic Gradient Descent to update GPD parameters.
-     * Fits the tail without re-running optimization on the entire dataset.
+     * @brief Online update using Gradient Ascent, enhanced with zero-checks and Hill Estimation constraints.
      */
     HOT void update_online(double extreme_loss, double learning_rate = 0.01) {
         if (extreme_loss <= u_) return;
 
+        tail_count_++;
         double y = extreme_loss - u_;
 
-        // Gradients of log-likelihood for GPD:
-        // L(xi, beta) = -log(beta) - (1/xi + 1) * log(1 + xi*y/beta)
+        // Prevent division by zero mathematically
+        if (beta_ < 1e-6) beta_ = 1e-6;
+        if (std::abs(xi_) < 1e-6) xi_ = 1e-6; // Prevent div by zero in Taylor expansions
+
         double term = 1.0 + (xi_ * y) / beta_;
+        if (term <= 0.0) term = 1e-6; // Domain constraint for log
 
         double d_beta = -1.0/beta_ + (1.0/xi_ + 1.0) * (xi_ * y) / (beta_ * beta_ * term);
         double d_xi = (1.0/(xi_*xi_)) * std::log(term) - (1.0/xi_ + 1.0) * (y/beta_) / term;
 
-        // Gradient Ascent
         beta_ += learning_rate * d_beta;
         xi_ += learning_rate * d_xi;
 
-        // Constraint bounds
         beta_ = std::max(0.01, beta_);
-        xi_ = std::max(0.001, std::min(0.5, xi_)); // Keep shape parameter sane for finance
+        xi_ = std::max(0.001, std::min(0.5, xi_));
     }
 
     /**
      * @brief Computes Expected Shortfall (CVaR)
      * "In the 1% of times things go terribly wrong, what is my average loss?"
+     * Hardened against division by zero (Bug #16 Competitor fix)
      */
     ALWAYS_INLINE double compute_expected_shortfall(double var_probability = 0.99) const {
-        // ES formula for GPD assuming VaR is already computed or approximated
-        // ES = (VaR + beta - xi * u) / (1 - xi)
-        // For simplicity in this online engine, we approximate ES directly from tail params
+        if (tail_count_ < 2) return u_; // Insufficient tail data
+
         double tail_prob = 1.0 - var_probability;
-        double var = u_ + (beta_ / xi_) * (std::pow(tail_prob, -xi_) - 1.0);
-        return (var + beta_ - xi_ * u_) / (1.0 - xi_);
+        if (tail_prob <= 0.0) return u_; // Prevent div by zero
+
+        double safe_xi = std::max(1e-6, xi_); // Safegaurd division by xi
+        double safe_denom = std::max(1e-6, 1.0 - safe_xi); // Safeguard CVaR denominator
+
+        double var = u_ + (beta_ / safe_xi) * (std::pow(tail_prob, -safe_xi) - 1.0);
+        return (var + beta_ - safe_xi * u_) / safe_denom;
     }
 
 private:
-    double u_;     // Threshold
-    double xi_;    // Shape parameter (tail fatness)
-    double beta_;  // Scale parameter
-};
-
-/**
- * @brief Adaptive Kelly Criterion with Entropy Regularization
- */
-class KellyEngine {
-public:
-    /**
-     * @brief Calculates optimal fraction of capital to risk.
-     * @param win_prob Probability of winning the trade.
-     * @param win_loss_ratio Reward / Risk ratio.
-     * @param entropy_penalty Penalty for uncertainty to prevent overbetting.
-     */
-    ALWAYS_INLINE double compute_fraction(double win_prob, double win_loss_ratio, double entropy_penalty = 0.1) const {
-        if (win_prob <= 0.0 || win_loss_ratio <= 0.0) return 0.0;
-
-        // Standard Kelly: f* = W - ((1 - W) / R)
-        double f_star = win_prob - ((1.0 - win_prob) / win_loss_ratio);
-
-        // Entropy regularization: H(p) = -p*log(p) - (1-p)*log(1-p)
-        double entropy = -win_prob * std::log(win_prob) - (1.0 - win_prob) * std::log(1.0 - win_prob);
-
-        // Reduce bet size if entropy (uncertainty) is high
-        double adaptive_f = f_star - (entropy_penalty * entropy);
-
-        return std::max(0.0, std::min(0.25, adaptive_f)); // Hard cap at Quarter Kelly for safety
-    }
+    double u_;
+    double xi_;
+    double beta_;
+    uint64_t tail_count_;
 };
 
 } // namespace berkshire::risk

@@ -13,6 +13,10 @@
 #include "risk/law_of_large_numbers.hpp"
 #include "core/advanced_data_structures.hpp"
 #include "ipc/zmq_reactor.hpp"
+#include "security/enclave_signer.hpp"
+#include "core/qos_queue.hpp"
+#include "agents/hypothesis_memory.hpp"
+#include "analytics/trade_journal.hpp"
 
 using namespace berkshire;
 
@@ -34,7 +38,7 @@ int main() {
     // 3. Risk & Pricing
     pricing::HamiltonianEngine pricing_engine;
     risk::EVTEngine evt_engine(100.0); // Extreme loss threshold
-    risk::KellyEngine kelly_engine;
+
 
     // 4. Execution & Routing
     ibkr::IBKRWrapper ibkr("127.0.0.1", 7497, 1);
@@ -63,11 +67,19 @@ int main() {
     });
 
     // Trading Engine Thread (Consumer)
+
+    // Multi-Tier QoS Execution Queue
+    core::QoSQualityQueue execution_queue;
+
+    // Security & Analytics
+    security::EnclaveSigner signer;
+    analytics::TradeJournal journal;
+    agents::HypothesisDatabase ai_memory;
+
     std::thread trading_engine([&]() {
         std::vector<pricing::HamiltonianEngine::OptionData> calls = { {105.0, 2.0, 1000, 5000, 0.05} };
         std::vector<pricing::HamiltonianEngine::OptionData> puts = { {95.0, 4.0, 1500, 6000, 0.06} };
 
-        // Advanced structures
         core::IterativeSegmentTree seg_tree(1024);
         risk::StableVariance variance_tracker;
         risk::LawOfLargeNumbers lln;
@@ -78,20 +90,16 @@ int main() {
 
             Eigen::VectorXd obs;
             if (market_data_queue.pop(obs)) {
-
                 double price = obs(0);
                 variance_tracker.update(price);
 
-                // Anti-Spoofing & Contagion Checks
                 alpha_fsm.update_regime_hierarchy(0.5, false);
                 if (alpha_fsm.detect_spoofing(10.0, 0.9)) {
-                    continue; // Skip tick due to microstructure manipulation
+                    continue;
                 }
 
-                // EVT Risk update
                 evt_engine.update_online(std::abs(price - 100.0));
 
-                // Regime inference
                 int state = regime_engine.filter_online(obs);
                 if (regime_engine.regime_change_detected()) {
                     regime_engine.reset_regime_change_flag();
@@ -102,7 +110,6 @@ int main() {
                 if (force > 0 && state == 0) {
                     double cvar = evt_engine.compute_expected_shortfall(0.99);
 
-                    // AlphaEvolve FSM 4D and Compliance Check
                     risk::Portfolio port{100000.0, 50000.0};
                     double safe_leverage = alpha_fsm.compute_safe_leverage(port.net_liquidation_value, cvar);
 
@@ -111,24 +118,23 @@ int main() {
 
                     risk::StrategyType current_strat = alpha_fsm.get_active_strategy();
                     if (!risk::ComplianceGuard::is_order_safe(current_strat, 1000.0 * safe_leverage, cvar, port)) {
-                        continue; // Blocked by Warren Buffett Guard
+                        continue;
                     }
 
-                    // Law of Large Numbers / CRRA Kelly Assessment
                     double r_of_ruin = lln.calculate_risk_of_ruin(0.70, 1.5, 0.02, 1000, 100);
-                    double optimal_f = crra_kelly.compute_fraction(0.70, 1.5, 2.0); // CRRA Gamma = 2.0
+                    double optimal_f = crra_kelly.compute_fraction(0.70, 1.5, 2.0);
 
                     if (cvar < 5.0 && optimal_f > 0.0 && r_of_ruin < 0.01) {
-                        core::OrderMessage master_order(1, 12345, 100, price, 0, 1, 0); // Buy 100
-                        std::vector<core::OrderMessage> frags;
+                        core::OrderMessage master_order(1, 12345, 100, price, 0, 1, 0);
 
-                        router.split_order(master_order, frags, 4); // Split into 4 chunks
+                        // Cryptographic Signature
+                        master_order.signature = signer.sign_payload(&master_order, 27);
+
+                        std::vector<core::OrderMessage> frags;
+                        router.split_order(master_order, frags, 4);
 
                         for (const auto& frag : frags) {
-                            if (frag.broker_id == 0) {
-                                ibkr.place_order("SPY", "BUY", frag.quantity, frag.limit_price);
-                                router.record_execution(frag.broker_id, true, 45.0); // Record success latency
-                            }
+                            execution_queue.enqueue(core::Priority::NORMAL, frag);
                         }
                     }
                 }
@@ -137,8 +143,27 @@ int main() {
             }
         }
     });
+
+    // Execution Draining Thread
+    std::thread execution_drainer([&]() {
+        while (running || execution_queue.has_items()) {
+            core::OrderMessage msg;
+            if (execution_queue.dequeue(msg)) {
+                if (signer.verify_signature(&msg, 27, msg.signature)) {
+                    ibkr.place_order("SPY", "BUY", msg.quantity, msg.limit_price);
+                    journal.record_trade(true, 150.0, 5000.0); // Simulated win
+                } else {
+                    std::cerr << "[SECURITY] INVALID ORDER SIGNATURE DETECTED!" << std::endl;
+                }
+            } else {
+                core::cpu_relax();
+            }
+        }
+    });
     data_feed.join();
     trading_engine.join();
+    execution_drainer.join();
+    journal.print_report();
     ibkr.disconnect();
 
     std::cout << "System shutdown gracefully." << std::endl;
