@@ -19,10 +19,34 @@ public:
         EVALUATING_SPREADS,
         EXECUTING_HEDGES,
         DEFENSIVE_MODE,
+        CIRCUIT_BREAKER,
+        RECOVERY_MODE,
         HALTED
     };
 
     AlphaEvolveFSM() : current_state_(State::IDLE), active_strategy_(risk::StrategyType::VerticalSpread) {}
+
+    HOT ALWAYS_INLINE bool detect_spoofing(double order_book_imbalance, double cancellation_rate) {
+        // Dynamic Microstructure Hashing logic simplified
+        if (order_book_imbalance > 5.0 && cancellation_rate > 0.8) {
+            std::cerr << "[AlphaEvolve] 🚨 SPOOFING DETECTED. Blocking Execution." << std::endl;
+            return true;
+        }
+        return false;
+    }
+
+    HOT ALWAYS_INLINE void update_regime_hierarchy(double systemic_correlation, bool limit_down_hit) {
+        if (limit_down_hit || systemic_correlation > 0.95) {
+            std::cerr << "[AlphaEvolve] 🔴 SYSTEMIC CONTAGION DETECTED. Engaging Circuit Breakers." << std::endl;
+            current_state_.store(State::CIRCUIT_BREAKER, std::memory_order_release);
+            active_strategy_.store(risk::StrategyType::ProtectivePut, std::memory_order_release);
+        } else if (current_state_.load() == State::CIRCUIT_BREAKER && systemic_correlation < 0.6) {
+            std::cout << "[AlphaEvolve] 🟢 RECOVERY MODE ENGAGED. Transitioning to safe yield harvesting." << std::endl;
+            current_state_.store(State::RECOVERY_MODE, std::memory_order_release);
+            active_strategy_.store(risk::StrategyType::CashSecuredPut, std::memory_order_release);
+        }
+    }
+
 
     HOT ALWAYS_INLINE void optimize_nd_calendar_spreads(const std::vector<std::string>& top_k_tickers, double iv_percentile) {
         for (const auto& ticker : top_k_tickers) {

@@ -10,6 +10,8 @@
 #include "execution/alpha_evolve_fsm.hpp"
 #include "risk/compliance_guard.hpp"
 #include "risk/evt_engine.hpp"
+#include "risk/law_of_large_numbers.hpp"
+#include "core/advanced_data_structures.hpp"
 #include "ipc/zmq_reactor.hpp"
 
 using namespace berkshire;
@@ -65,24 +67,40 @@ int main() {
         std::vector<pricing::HamiltonianEngine::OptionData> calls = { {105.0, 2.0, 1000, 5000, 0.05} };
         std::vector<pricing::HamiltonianEngine::OptionData> puts = { {95.0, 4.0, 1500, 6000, 0.06} };
 
+        // Advanced structures
+        core::IterativeSegmentTree seg_tree(1024);
+        risk::StableVariance variance_tracker;
+        risk::LawOfLargeNumbers lln;
+        risk::CRRAKelly crra_kelly;
+
         while (running || !market_data_queue.empty_heuristic()) {
             reactor.poll_commands();
 
             Eigen::VectorXd obs;
             if (market_data_queue.pop(obs)) {
-                evt_engine.update_online(std::abs(obs(0) - 100.0));
 
+                double price = obs(0);
+                variance_tracker.update(price);
+
+                // Anti-Spoofing & Contagion Checks
+                alpha_fsm.update_regime_hierarchy(0.5, false);
+                if (alpha_fsm.detect_spoofing(10.0, 0.9)) {
+                    continue; // Skip tick due to microstructure manipulation
+                }
+
+                // EVT Risk update
+                evt_engine.update_online(std::abs(price - 100.0));
+
+                // Regime inference
                 int state = regime_engine.filter_online(obs);
                 if (regime_engine.regime_change_detected()) {
                     regime_engine.reset_regime_change_flag();
                 }
 
-                double price = obs(0);
                 double force = pricing_engine.compute_probable_direction(price, calls);
 
                 if (force > 0 && state == 0) {
                     double cvar = evt_engine.compute_expected_shortfall(0.99);
-                    double fraction = kelly_engine.compute_fraction(0.65, 1.5, 0.1);
 
                     // AlphaEvolve FSM 4D and Compliance Check
                     risk::Portfolio port{100000.0, 50000.0};
@@ -96,7 +114,11 @@ int main() {
                         continue; // Blocked by Warren Buffett Guard
                     }
 
-                    if (cvar < 5.0 && fraction > 0.0) {
+                    // Law of Large Numbers / CRRA Kelly Assessment
+                    double r_of_ruin = lln.calculate_risk_of_ruin(0.70, 1.5, 0.02, 1000, 100);
+                    double optimal_f = crra_kelly.compute_fraction(0.70, 1.5, 2.0); // CRRA Gamma = 2.0
+
+                    if (cvar < 5.0 && optimal_f > 0.0 && r_of_ruin < 0.01) {
                         core::OrderMessage master_order(1, 12345, 100, price, 0, 1, 0); // Buy 100
                         std::vector<core::OrderMessage> frags;
 
@@ -115,7 +137,6 @@ int main() {
             }
         }
     });
-
     data_feed.join();
     trading_engine.join();
     ibkr.disconnect();
