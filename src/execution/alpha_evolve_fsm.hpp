@@ -40,7 +40,7 @@ public:
     HOT ALWAYS_INLINE bool detect_spoofing(double order_book_imbalance, double cancellation_rate) {
         // Dynamic Microstructure Hashing logic simplified
         if (order_book_imbalance > 5.0 && cancellation_rate > 0.8) {
-            std::cerr << "[AlphaEvolve] 🚨 SPOOFING DETECTED. Blocking Execution." << std::endl;
+            /* std::cerr << "[AlphaEvolve] 🚨 SPOOFING DETECTED. Blocking Execution." << std::endl; */
             return true;
         }
         return false;
@@ -122,10 +122,18 @@ public:
         }
     }
 
-    HOT ALWAYS_INLINE void optimize_nd_calendar_spreads(const std::vector<std::string>& top_k_tickers, double iv_percentile) {
+    HOT ALWAYS_INLINE void optimize_nd_calendar_spreads(const std::vector<std::string>& top_k_tickers, double iv_percentile, bool is_pre_earnings) {
         for (const auto& ticker : top_k_tickers) {
             std::cout << "[AlphaEvolve] 4D Optimizing N-Double Calendar Spread for: " << ticker
                       << " | Target: Zero-Slippage, +Vega, +Theta" << std::endl;
+        }
+
+        if (is_pre_earnings) {
+            // VOLATILITY CRUSH PREDICTION: Force transition into short vol spreads
+            std::cout << "[AlphaEvolve] ⚠️ PRE-EARNINGS / VOL CRUSH DETECTED! Reversing Vega Bias." << std::endl;
+            std::cout << " -> Constructing Iron Butterfly / Short Strangle (Covered) to farm Vol Implosion." << std::endl;
+            active_strategy_.store(risk::StrategyType::IronCondor, std::memory_order_release);
+            return;
         }
 
         if (iv_percentile < 20.0) {

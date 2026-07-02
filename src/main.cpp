@@ -145,12 +145,12 @@ int main() {
                     risk::Portfolio port{100000.0, 50000.0};
                     double safe_leverage = alpha_fsm.compute_safe_leverage(port.net_liquidation_value, cvar);
 
-                    // DP Knapsack optimization for Structure Generation
+                    // DP Knapsack optimization for Structure Generation (now with 2nd-order greeks)
                     std::vector<pricing::OptionLeg> universe = {
-                        {"SPY", 100.0, 30, true, 2.50, 0.45, 0.08, -0.05, 0.12, 0.20, 150.0},
-                        {"SPY", 105.0, 7, false, 1.20, -0.30, -0.06, 0.08, -0.09, 0.22, 50.0},
-                        {"SPY", 95.0, 30, false, 2.80, -0.45, 0.08, -0.04, 0.14, 0.25, 200.0},
-                        {"SPY", 90.0, 7, true, 1.00, 0.30, -0.05, 0.07, -0.10, 0.28, 40.0}
+                        {"SPY", 100.0, 30, true, 2.50, 0.45, 0.08, -0.05, 0.12, 0.01, 0.002, 0.05, 0.20, 150.0},
+                        {"SPY", 105.0, 7, false, 1.20, -0.30, -0.06, 0.08, -0.09, -0.01, -0.001, -0.02, 0.22, 50.0},
+                        {"SPY", 95.0, 30, false, 2.80, -0.45, 0.08, -0.04, 0.14, 0.02, 0.003, 0.04, 0.25, 200.0},
+                        {"SPY", 90.0, 7, true, 1.00, 0.30, -0.05, 0.07, -0.10, -0.02, -0.002, -0.01, 0.28, 40.0}
                     };
 
                     pricing::KnapsackConfig dp_config;

@@ -25,10 +25,18 @@ struct OptionLeg {
     int expiration_dte;
     bool is_call;
     double price;
+
+    // First-order Greeks
     double delta;
     double gamma;
     double theta;
     double vega;
+
+    // Second-order Econophysics Greeks
+    double vanna;
+    double charm;
+    double vomma;
+
     double iv;
     double cvar; // Precomputed CVaR impact
 };
@@ -130,7 +138,18 @@ public:
 
 private:
     ALWAYS_INLINE double calculate_leg_score(const OptionLeg& leg, const KnapsackConfig& config) const {
-        double base_score = (leg.vega + leg.gamma) / std::max(std::abs(leg.theta), 0.001);
+        double safe_theta = std::max(std::abs(leg.theta), 0.001);
+
+        // Base score: (Vega + Gamma) / |Theta|
+        double base_score = (leg.vega + leg.gamma * 100.0) / safe_theta;
+
+        // Vanna: Interaction of spot & vol. We want positive vanna in directional plays.
+        // Charm: Delta decay over time. Positive charm means delta increases naturally over time.
+        // Vomma: Convexity of Vega. Positive vomma protects against vol spikes.
+
+        base_score += leg.vanna * 2.0;
+        base_score += leg.charm * 5.0;
+        base_score += leg.vomma * 3.0;
 
         if (config.regime == MarketRegime::LATERAL_LOW_VOL || config.regime == MarketRegime::LATERAL_HIGH_VOL) {
             base_score -= 5.0 * std::abs(leg.delta);
