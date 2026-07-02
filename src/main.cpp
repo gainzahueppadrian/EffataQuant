@@ -19,6 +19,7 @@
 #include "risk/t_copula_cvar.hpp"
 #include "risk/greeks_kelly.hpp"
 #include "analytics/greeks_aggregator.hpp"
+#include "analytics/asymmetric_engine.hpp"
 #include "optimization/hrp_allocator.hpp"
 #include "security/enclave_signer.hpp"
 #include "core/qos_queue.hpp"
@@ -170,6 +171,20 @@ int main() {
                         // Step 8: Registrar P&L attribution por Greeks
                         auto agg = analytics::GreeksAggregator::aggregate_portfolio(optimized_structure.value().selected_legs, price);
                         analytics::GreeksAggregator::print_attribution(agg);
+
+                        // Asymmetric Strategy Analysis based on the central position (Master Order)
+                        auto gs_metrics = analytics::AsymmetricStrategyEngine::analyze_gamma_scalping(greeks, price, 0.80, 0.20);
+                        auto vc_metrics = analytics::AsymmetricStrategyEngine::analyze_volatility_convexity(greeks, 0.50);
+                        auto ch_metrics = analytics::AsymmetricStrategyEngine::analyze_charm_unwind(greeks, 1.0);
+
+                        std::cout << "\n💰 ANÁLISIS DE ESTRATEGIA ASIMÉTRICA:" << std::endl;
+                        std::cout << "   1. GAMMA SCALPING POTENTIAL:" << std::endl;
+                        std::cout << "      Edge Ratio: " << gs_metrics.edge_ratio << "x" << std::endl;
+                        std::cout << "   2. EXPOSICIÓN A CONVEXIDAD DE VOLATILIDAD:" << std::endl;
+                        std::cout << "      Beneficio de Convexidad: $" << vc_metrics.convexity_benefit << " (" << vc_metrics.exposure_type << ")" << std::endl;
+                        std::cout << "   3. PERFIL DE DESARME POR CHARM:" << std::endl;
+                        std::cout << "      Flujo MM por contrato: " << ch_metrics.mm_hedge_flow_per_contract << " acciones" << std::endl;
+                        std::cout << "      Dirección: " << ch_metrics.flow_direction << " | Intensidad: " << ch_metrics.intensity << std::endl;
                     }
 
                     // Evaluate Lateral vs Directional Regimes for Double Diagonal structures
