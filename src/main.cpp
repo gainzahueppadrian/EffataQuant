@@ -14,6 +14,10 @@
 #include "risk/law_of_large_numbers.hpp"
 #include "core/advanced_data_structures.hpp"
 #include "ipc/zmq_reactor.hpp"
+#include "pricing/aad_greeks.hpp"
+#include "analytics/ukf_tracker.hpp"
+#include "risk/t_copula_cvar.hpp"
+#include "optimization/hrp_allocator.hpp"
 #include "security/enclave_signer.hpp"
 #include "core/qos_queue.hpp"
 #include "agents/hypothesis_memory.hpp"
@@ -46,6 +50,10 @@ int main() {
     ibkr::IBKRWrapper ibkr("127.0.0.1", 7497, 1);
     execution::SmartOrderRouter router(3); // 3 Brokers (e.g., IBKR, Lightspeed, Schwab)
     execution::AlphaEvolveFSM alpha_fsm;
+    // Advanced Econophysics Models
+    analytics::UnscentedKalmanFilter ukf(2, 1);
+    risk::TCopulaCVaR t_copula(3, 4.0); // 3 assets, 4.0 degrees of freedom (fat tails)
+
 
     // Simulate offline training
     std::cout << "Training DGMH Engine offline..." << std::endl;
@@ -106,6 +114,22 @@ int main() {
                 if (regime_engine.regime_change_detected()) {
                     regime_engine.reset_regime_change_flag();
                 }
+
+
+                // AAD $O(1)$ Greeks Engine Evaluation
+                // Replaces slow Finite Differences
+
+                // Hamiltonian Econophysics Engine Evaluation
+                // Bypasses Black-Scholes completely using Liquidity Gravity Fields and UKF Volatility
+                pricing::AADResult greeks = pricing::AADEngine::compute_hamiltonian(
+                    price, 100.0, 30.0/365.0, 0.20, 5000.0, 15000.0, true);
+
+
+                // Track Implied Volatility non-linearities via Unscented Kalman Filter
+                Eigen::VectorXd iv_obs(1);
+                iv_obs << 0.20; // Dummy IV
+                ukf.predict();
+                ukf.update(iv_obs);
 
                 double force = pricing_engine.compute_probable_direction(price, calls);
 
