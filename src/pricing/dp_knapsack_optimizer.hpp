@@ -12,10 +12,11 @@
 namespace berkshire::pricing {
 
 enum class MarketRegime {
-    LATERAL_LOW_VOL,
-    LATERAL_HIGH_VOL,
-    DIRECTIONAL_BULL,
-    DIRECTIONAL_BEAR,
+    VOLATILITY_EXPANSION,
+    VOLATILITY_CONTRACTION,
+    DIRECTIONAL_WITH_VANNA,
+    GAMMA_SCALPING,
+    CHARM_EXPLOITATION,
     CRISIS
 };
 
@@ -36,6 +37,11 @@ struct OptionLeg {
     double vanna;
     double charm;
     double vomma;
+    double veta;
+    double speed;
+    double zomma;
+    double color;
+    double ultima;
 
     double iv;
     double cvar; // Precomputed CVaR impact
@@ -151,14 +157,14 @@ private:
         base_score += leg.charm * 5.0;
         base_score += leg.vomma * 3.0;
 
-        if (config.regime == MarketRegime::LATERAL_LOW_VOL || config.regime == MarketRegime::LATERAL_HIGH_VOL) {
+        if (config.regime == MarketRegime::VOLATILITY_CONTRACTION || config.regime == MarketRegime::CHARM_EXPLOITATION) {
             base_score -= 5.0 * std::abs(leg.delta);
-        } else if (config.regime == MarketRegime::DIRECTIONAL_BULL) {
-            if (leg.delta > 0) base_score += 3.0 * leg.delta;
-            else base_score -= 2.0 * std::abs(leg.delta);
-        } else if (config.regime == MarketRegime::DIRECTIONAL_BEAR) {
-            if (leg.delta < 0) base_score += 3.0 * std::abs(leg.delta);
-            else base_score -= 2.0 * leg.delta;
+        } else if (config.regime == MarketRegime::DIRECTIONAL_WITH_VANNA) {
+            base_score += 3.0 * std::abs(leg.delta) + 2.0 * std::abs(leg.vanna);
+        } else if (config.regime == MarketRegime::GAMMA_SCALPING) {
+            base_score += 5.0 * leg.gamma + 2.0 * leg.speed;
+        } else if (config.regime == MarketRegime::VOLATILITY_EXPANSION) {
+            base_score += 5.0 * leg.vega + 3.0 * leg.vomma;
         }
 
         if (leg.vega < 0) base_score -= 10.0;

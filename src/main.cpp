@@ -17,6 +17,8 @@
 #include "pricing/aad_greeks.hpp"
 #include "analytics/ukf_tracker.hpp"
 #include "risk/t_copula_cvar.hpp"
+#include "risk/greeks_kelly.hpp"
+#include "analytics/greeks_aggregator.hpp"
 #include "optimization/hrp_allocator.hpp"
 #include "security/enclave_signer.hpp"
 #include "core/qos_queue.hpp"
@@ -147,14 +149,15 @@ int main() {
 
                     // DP Knapsack optimization for Structure Generation (now with 2nd-order greeks)
                     std::vector<pricing::OptionLeg> universe = {
-                        {"SPY", 100.0, 30, true, 2.50, 0.45, 0.08, -0.05, 0.12, 0.01, 0.002, 0.05, 0.20, 150.0},
-                        {"SPY", 105.0, 7, false, 1.20, -0.30, -0.06, 0.08, -0.09, -0.01, -0.001, -0.02, 0.22, 50.0},
-                        {"SPY", 95.0, 30, false, 2.80, -0.45, 0.08, -0.04, 0.14, 0.02, 0.003, 0.04, 0.25, 200.0},
-                        {"SPY", 90.0, 7, true, 1.00, 0.30, -0.05, 0.07, -0.10, -0.02, -0.002, -0.01, 0.28, 40.0}
+                        // symbol, strike, dte, is_call, price, delta, gamma, theta, vega, vanna, charm, vomma, veta, speed, zomma, color, ultima, iv
+                        {"SPY", 100.0, 30, true, 2.50, 0.45, 0.08, -0.05, 0.12, 0.01, 0.002, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.20, 150.0},
+                        {"SPY", 105.0, 7, false, 1.20, -0.30, -0.06, 0.08, -0.09, -0.01, -0.001, -0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.22, 50.0},
+                        {"SPY", 95.0, 30, false, 2.80, -0.45, 0.08, -0.04, 0.14, 0.02, 0.003, 0.04, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25, 200.0},
+                        {"SPY", 90.0, 7, true, 1.00, 0.30, -0.05, 0.07, -0.10, -0.02, -0.002, -0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.28, 40.0}
                     };
 
                     pricing::KnapsackConfig dp_config;
-                    dp_config.regime = pricing::MarketRegime::LATERAL_LOW_VOL;
+                    dp_config.regime = pricing::MarketRegime::VOLATILITY_CONTRACTION;
                     dp_config.target_portfolio_delta = 0.0;
                     dp_config.max_portfolio_cvar = port.net_liquidation_value * safe_leverage;
                     dp_config.required_legs = 4;
@@ -163,6 +166,10 @@ int main() {
 
                     if (optimized_structure.has_value()) {
                         std::cout << "[Executor] ✅ 4-Leg Double Diagonal structure assembled successfully via DP Knapsack." << std::endl;
+
+                        // Step 8: Registrar P&L attribution por Greeks
+                        auto agg = analytics::GreeksAggregator::aggregate_portfolio(optimized_structure.value().selected_legs, price);
+                        analytics::GreeksAggregator::print_attribution(agg);
                     }
 
                     // Evaluate Lateral vs Directional Regimes for Double Diagonal structures
@@ -178,7 +185,8 @@ int main() {
                     }
 
                     double r_of_ruin = lln.calculate_risk_of_ruin(0.70, 1.5, 0.02, 1000, 100);
-                    double optimal_f = crra_kelly.compute_fraction(0.70, 1.5, 2.0);
+                    double base_f = risk::GreeksKelly::compute_base_kelly(0.70, 1.5);
+                    double optimal_f = risk::GreeksKelly::compute_enhanced_kelly(base_f, greeks, force, 0.20);
 
                     if (cvar < 5.0 && optimal_f > 0.0 && r_of_ruin < 0.01) {
                         core::OrderMessage master_order(1, 12345, 100, price, 0, 1, 0);

@@ -29,6 +29,9 @@ enum class StrategyType {
     // 5. Tunnels & Others
     TunnelBullish, TunnelBearish, TunnelDiagonalLeaps, SyntheticDividend,
 
+    // 6. Advanced Greeks-based
+    LongStraddles, ShortIronCondor, RatioCallSpreads, RatioPutSpreads, LongGamma, PinRiskPlays,
+
     // ILLEGAL NAKED OPTIONS (CNMV / MAR / Warren Buffett Rule)
     NakedCall, NakedPut, NakedStrangle, NakedStraddle
 };

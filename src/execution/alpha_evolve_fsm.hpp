@@ -14,13 +14,12 @@
 namespace berkshire::execution {
 
 enum class MarketRegime {
-    LATERAL_LOW_VOL,
-    LATERAL_HIGH_VOL,
-    TRENDING_BULL,
-    TRENDING_BEAR,
-    VOLATILE_MEAN_REV,
-    CRISIS,
-    TRANSITION
+    VOLATILITY_EXPANSION,
+    VOLATILITY_CONTRACTION,
+    DIRECTIONAL_WITH_VANNA,
+    GAMMA_SCALPING,
+    CHARM_EXPLOITATION,
+    CRISIS
 };
 
 class AlphaEvolveFSM {
@@ -87,8 +86,52 @@ public:
      * @brief Advanced N-Double Diagonal Orchestration (Symmetric vs Asymmetric)
      * Replaces standard Iron Condors with Positive Vega configurations.
      */
+
+    HOT ALWAYS_INLINE void orchestrate_advanced_regimes(MarketRegime regime, double directional_force) {
+        switch (regime) {
+            case MarketRegime::VOLATILITY_EXPANSION:
+                // Griegos dominantes: Vega (+), Vomma (+), Vanna (variable)
+                std::cout << "[AlphaEvolve] 🚀 Regime 1: Volatility Expansion (Post-Earnings/FOMC). Dominant: +Vega, +Vomma" << std::endl;
+                active_strategy_.store(risk::StrategyType::LongStraddles, std::memory_order_release);
+                break;
+
+            case MarketRegime::VOLATILITY_CONTRACTION:
+                // Griegos dominantes: Theta (+), Vomma (-), Gamma (-)
+                std::cout << "[AlphaEvolve] 📉 Regime 2: Volatility Contraction (Post-Event). Dominant: +Theta, -Vomma" << std::endl;
+                active_strategy_.store(risk::StrategyType::ShortIronCondor, std::memory_order_release);
+                break;
+
+            case MarketRegime::DIRECTIONAL_WITH_VANNA:
+                // Griegos dominantes: Delta (+/-), Vanna (+), Charm (variable)
+                std::cout << "[AlphaEvolve] 🌊 Regime 3: Directional with Vanna (Trending). Dominant: +Delta, +Vanna" << std::endl;
+                if (directional_force > 0) {
+                    active_strategy_.store(risk::StrategyType::RatioCallSpreads, std::memory_order_release);
+                } else {
+                    active_strategy_.store(risk::StrategyType::RatioPutSpreads, std::memory_order_release);
+                }
+                break;
+
+            case MarketRegime::GAMMA_SCALPING:
+                // Griegos dominantes: Gamma (+), Theta (-), Speed (+)
+                std::cout << "[AlphaEvolve] ⚡ Regime 4: Gamma Scalping (High RV). Dominant: +Gamma, +Speed" << std::endl;
+                active_strategy_.store(risk::StrategyType::LongGamma, std::memory_order_release);
+                break;
+
+            case MarketRegime::CHARM_EXPLOITATION:
+                // Griegos dominantes: Charm (extremo), Gamma (alto), Vanna (variable)
+                std::cout << "[AlphaEvolve] ⏳ Regime 5: Charm Exploitation (Pre-Expiration). Dominant: +Charm" << std::endl;
+                active_strategy_.store(risk::StrategyType::PinRiskPlays, std::memory_order_release);
+                break;
+
+            case MarketRegime::CRISIS:
+                std::cout << "[AlphaEvolve] 🚨 Regime 6: Crisis. Triggering Defensive Mode." << std::endl;
+                trigger_defensive_mode();
+                break;
+        }
+    }
+
     HOT ALWAYS_INLINE void orchestrate_double_diagonal(MarketRegime regime, double directional_force) {
-        if (regime == MarketRegime::LATERAL_LOW_VOL || regime == MarketRegime::LATERAL_HIGH_VOL) {
+        if (regime == MarketRegime::VOLATILITY_CONTRACTION || regime == MarketRegime::CHARM_EXPLOITATION) {
             std::cout << "[AlphaEvolve] ⚖️ Lateral Regime Detected: Constructing SYMMETRIC N-Double Diagonal." << std::endl;
             std::cout << " -> Delta Netto ~ 0. Positive Vega. Selling near-term, buying far-term OTM." << std::endl;
             active_strategy_.store(risk::StrategyType::DoubleDiagonalSpread, std::memory_order_release);

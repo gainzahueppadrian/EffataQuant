@@ -22,6 +22,11 @@ struct AADResult {
     double vanna;
     double charm;
     double vomma;
+    double veta;
+    double speed;
+    double zomma;
+    double color;
+    double ultima;
 };
 
 /**
@@ -30,6 +35,59 @@ struct AADResult {
  * instead of the fundamentally flawed Black-Scholes-Merton model.
  */
 class AADEngine {
+public:
+
+    static inline double norm_pdf(double x) {
+        return std::exp(-0.5 * x * x) / std::sqrt(2.0 * M_PI);
+    }
+
+    static inline double norm_cdf(double x) {
+        return 0.5 * std::erfc(-x * M_SQRT1_2);
+    }
+
+    HOT ALWAYS_INLINE static AADResult compute_econophysics_greeks(
+        double S, double K, double T, double v, double r, double q, bool is_call)
+    {
+        AADResult res{};
+        if (T <= 0.0 || v <= 0.0) return res;
+
+        double d1 = (std::log(S / K) + (r - q + 0.5 * v * v) * T) / (v * std::sqrt(T));
+        double d2 = d1 - v * std::sqrt(T);
+
+        double Nd1 = norm_cdf(is_call ? d1 : -d1);
+        double Nd2 = norm_cdf(is_call ? d2 : -d2);
+        double nd1 = norm_pdf(d1);
+
+        // A) 1st Order Greeks
+        res.delta = is_call ? std::exp(-q * T) * Nd1 : -std::exp(-q * T) * norm_cdf(-d1);
+        res.gamma = std::exp(-q * T) * nd1 / (S * v * std::sqrt(T));
+
+        double theta_term1 = -S * std::exp(-q * T) * nd1 * v / (2.0 * std::sqrt(T));
+        if (is_call) {
+            res.theta = theta_term1 + q * S * std::exp(-q * T) * Nd1 - r * K * std::exp(-r * T) * Nd2;
+        } else {
+            res.theta = theta_term1 - q * S * std::exp(-q * T) * norm_cdf(-d1) + r * K * std::exp(-r * T) * norm_cdf(-d2);
+        }
+        res.vega = S * std::exp(-q * T) * nd1 * std::sqrt(T);
+        res.rho = is_call ? K * T * std::exp(-r * T) * Nd2 : -K * T * std::exp(-r * T) * norm_cdf(-d2);
+
+        // B) 2nd & 3rd Order Greeks
+        res.vanna = -std::exp(-q * T) * nd1 * d2 / v;
+        res.vomma = res.vega * d1 * d2 / v;
+
+        double charm_term = nd1 * (2.0 * (r - q) * T - d2 * v * std::sqrt(T)) / (2.0 * T * v * std::sqrt(T));
+        res.charm = is_call ? std::exp(-q * T) * (q * Nd1 - charm_term) : -std::exp(-q * T) * (q * norm_cdf(-d1) + charm_term);
+
+        res.veta = -S * std::exp(-q * T) * nd1 * std::sqrt(T) * (q + (r - q) * d1 / (v * std::sqrt(T)) - (1.0 + d1 * d2) / (2.0 * T));
+
+        res.speed = -res.gamma / S * (d1 / (v * std::sqrt(T)) + 1.0);
+        res.zomma = res.gamma * (d1 * d2 - 1.0) / v;
+        res.color = res.gamma * (r - q + (1.0 - d1 * d2) / (2.0 * T) + d1 * (r - q) * std::sqrt(T) / (2.0 * v * T));
+        res.ultima = res.vega * (d1 * d2 * (d1 * d2 - 1.0) - d1 * d1 - d2 * d2) / (v * v);
+
+        return res;
+    }
+
 public:
     /**
      * @brief Computes Price and Greeks via reverse-mode AD on the Hamiltonian Liquidity model.
