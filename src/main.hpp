@@ -1,5 +1,3 @@
-#include "memory/numa_memory_pool.hpp"
-#include "memory/hft_allocator.hpp"
 // effata_v32/main_collar_optimizer.cpp
 #include <iostream>
 #include <thread>
@@ -15,7 +13,7 @@ struct alignas(64) MarketTick {
     uint8_t padding[27];  // Alinear a 64 bytes
 };
 
-#include "strategies/mark_cuban_collar.hpp"
+#include "core/mark_cuban_collar.hpp"
 #include "optimization/dp_knapsack_2d.hpp"
 #include "ml/strategy_predictor.hpp"
 #include "risk/advanced_risk_manager.hpp"
